@@ -28,33 +28,22 @@ class JobQueue
     LOCK.synchronize { executing?(id) || queued?(id) }
   end
 
-  # Assumes executing threads will be closed by themselves
-  def clear
-    LOCK.synchronize do
-      @queue.each { |_, jes| jes.each(&:close) }
-      @queue.clear
-    end
-  end
-
   # when no queue is given jobs run in parallel (each in their own queue) and start instantly
   # when samson is restarting we do not start jobs, but leave them pending
   def add(job_execution, queue: nil)
     queue ||= job_execution.id
-    job_execution.on_finish { delete_and_enqueue_next(queue, job_execution) }
 
     LOCK.synchronize do
       if JobExecution.enabled
         if @executing[queue]
           @queue[queue] << job_execution
         else
-          start_job(job_execution, queue)
+          perform_job(job_execution, queue)
         end
       end
     end
 
     instrument
-
-    job_execution
   end
 
   def debug
@@ -63,23 +52,29 @@ class JobQueue
 
   private
 
-  def start_job(job_execution, queue)
+  def perform_job(job_execution, queue)
     @executing[queue] = job_execution
-    job_execution.start
+    Thread.new do
+      begin
+        job_execution.perform
+      ensure
+        delete_and_enqueue_next(job_execution, queue)
+      end
+    end
   end
 
-  def delete_and_enqueue_next(queue_name, job_execution)
+  def delete_and_enqueue_next(job_execution, queue)
     LOCK.synchronize do
-      previous = @executing.delete(queue_name)
+      previous = @executing.delete(queue)
       unless job_execution == previous
-        raise "Unexpected executing job found in queue #{queue_name}: expected #{job_execution&.id} got #{previous&.id}"
+        raise "Unexpected executing job found in queue #{queue}: expected #{job_execution&.id} got #{previous&.id}"
       end
 
-      if JobExecution.enabled && (job_execution = @queue[queue_name].shift)
-        start_job(job_execution, queue_name)
+      if JobExecution.enabled && (job_execution = @queue[queue].shift)
+        perform_job(job_execution, queue)
       end
 
-      @queue.delete(queue_name) if @queue[queue_name].empty? # save memory, and time when iterating all queues
+      @queue.delete(queue) if @queue[queue].empty? # save memory, and time when iterating all queues
     end
 
     instrument

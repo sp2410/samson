@@ -50,8 +50,9 @@ class JobExecution
     end
   end
 
-  def start
-    @thread = Thread.new { ActiveRecord::Base.connection_pool.with_connection { run } }
+  def perform
+    @thread = Thread.current
+    ActiveRecord::Base.connection_pool.with_connection { run }
   end
 
   def wait
@@ -277,7 +278,7 @@ class JobExecution
       job_queue.dequeue(id)
     end
 
-    def start_job(*args)
+    def perform_later(*args)
       job_queue.add(*args)
     end
 

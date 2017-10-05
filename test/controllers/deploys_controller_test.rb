@@ -55,8 +55,8 @@ describe DeploysController do
           executing = Job.create!(project: project, command: "echo 1", user: user) { |j| j.id = 123321 }
           executing.stubs(:deploy).returns(deploy)
           queued = Job.create!(project: project, command: "echo 1", user: user) { |j| j.id = 234432 }
-          JobExecution.start_job(JobExecution.new('master', executing), queue: :x)
-          JobExecution.start_job(JobExecution.new('master', queued), queue: :x)
+          JobExecution.perform_later(JobExecution.new('master', executing), queue: :x)
+          JobExecution.perform_later(JobExecution.new('master', queued), queue: :x)
           JobExecution.executing.size.must_equal 1
           assert JobExecution.queued?(queued.id)
 
