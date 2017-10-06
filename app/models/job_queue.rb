@@ -33,15 +33,19 @@ class JobQueue
   def add(job_execution, queue: nil)
     queue ||= job_execution.id
 
-    LOCK.synchronize do
-      if JobExecution.enabled
+    perform = if JobExecution.enabled
+      LOCK.synchronize do
         if @executing[queue]
           @queue[queue] << job_execution
+          false
         else
-          perform_job(job_execution, queue)
+          @executing[queue] = job_execution
+          true
         end
       end
     end
+
+    perform_job(job_execution, queue) if perform
 
     instrument
   end
@@ -53,7 +57,6 @@ class JobQueue
   private
 
   def perform_job(job_execution, queue)
-    @executing[queue] = job_execution
     Thread.new do
       begin
         job_execution.perform
@@ -64,18 +67,21 @@ class JobQueue
   end
 
   def delete_and_enqueue_next(job_execution, queue)
+    next_execution = nil
     LOCK.synchronize do
       previous = @executing.delete(queue)
       unless job_execution == previous
         raise "Unexpected executing job found in queue #{queue}: expected #{job_execution&.id} got #{previous&.id}"
       end
 
-      if JobExecution.enabled && (job_execution = @queue[queue].shift)
-        perform_job(job_execution, queue)
+      if JobExecution.enabled && (next_execution = @queue[queue].shift)
+        @executing[queue] = next_execution
       end
 
       @queue.delete(queue) if @queue[queue].empty? # save memory, and time when iterating all queues
     end
+
+    perform_job(next_execution, queue) if next_execution
 
     instrument
   end
