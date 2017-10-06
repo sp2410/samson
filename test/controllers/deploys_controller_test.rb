@@ -48,16 +48,20 @@ describe DeploysController do
       end
 
       it "renders debug output with job/deploy and executing/queued" do
-        JobExecution.any_instance.expects(:on_finish).times(4)
-        JobExecution.any_instance.expects(:start)
         with_job_execution do
-          # start 1 job and queue another
+          # start 1 job and keep it executing
+          lock = Mutex.new.lock
           executing = Job.create!(project: project, command: "echo 1", user: user) { |j| j.id = 123321 }
           executing.stubs(:deploy).returns(deploy)
-          queued = Job.create!(project: project, command: "echo 1", user: user) { |j| j.id = 234432 }
+          executing.expects(:perform).with { lock.synchronize { true } }
           JobExecution.perform_later(JobExecution.new('master', executing), queue: :x)
+
+          # queue 1 job after it
+          queued = Job.create!(project: project, command: "echo 1", user: user) { |j| j.id = 234432 }
+          queued.expects(:perform).never
           JobExecution.perform_later(JobExecution.new('master', queued), queue: :x)
-          JobExecution.executing.size.must_equal 1
+
+          assert JobExecution.executing?(executing.id)
           assert JobExecution.queued?(queued.id)
 
           get :active, params: {debug: '1'}
@@ -65,6 +69,8 @@ describe DeploysController do
           response.body.wont_include executing.id.to_s
           response.body.must_include executing.deploy.id.to_s # renders as deploy
           response.body.must_include queued.id.to_s # renders as job
+
+          lock.unlock
         end
       end
     end
